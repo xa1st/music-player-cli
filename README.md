@@ -35,13 +35,13 @@ git clone https://github.com/xa1st/mddplayer.git
 cd mddplayer
 ```
 
-1. **编译项目**（Release 模式优化性能）
+ **编译项目**（Release 模式优化性能）
 
 ```
 cargo build --release
 ```
 
-1. **启动播放器**（选择以下任意一种方式）
+**启动播放器**（选择以下任意一种方式）
 
 * 播放单个文件
 

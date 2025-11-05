@@ -2,9 +2,16 @@
 # 东东播放器 (mddplayer) 🎵
 
 ![Rust Language](https://img.shields.io/badge/language-Rust-orange?style=flat-square\&logo=rust)
-![Apache 2.0 License](https://img.shields.io/badge/Apache%202.0-100%25%20Open%20Source-green?style=for-the-badge)
+![Apache 2.0 License](https://img.shields.io/badge/Apache%202.0-Source-green)
+[![GitHub stars](https://img.shields.io/github/stars/xa1st/mddplayer.svg?label=Stars&style=flat-square)](https://github.com/xa1st/mddplayer)
+[![GitHub forks](https://img.shields.io/github/forks/xa1st/mddplayer.svg?label=Fork&style=flat-square)](https://github.com/xa1st/mddplayer)
+[![GitHub issues](https://img.shields.io/github/issues/xa1st/mddplayer.svg?label=Issue&style=flat-square)](https://github.com/xa1st/mddplayer/issues)
+![](https://changkun.de/urlstat?mode=github&repo=xa1st/mddplayer)
+[![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](https://github.com/xa1st/mddplayer/blob/master/LICENSE)
 
 一款基于 **Rust** 开发的轻量级终端音频播放器，主打「简洁高效」与「终端友好」，支持主流音频格式，提供灵活的播放控制与可视化反馈。
+
+<img src="https://raw.githubusercontent.com/xa1st/mddplayer/master/assets/preview.webp" width="100%" />
 
 ## ✨ 核心特性
 

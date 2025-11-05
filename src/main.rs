@@ -133,8 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         const FIXED_TEXT_OVERHEAD: usize = 65; 
         let available_width = terminal_width.saturating_sub(FIXED_TEXT_OVERHEAD);
         // 剩余空间分配给标题和艺术家
-        let title_artist_width = available_width / 2;
-        
+        let title_artist_width = available_width * 3 / 2;
         let track_path = &playlist[current_track_index];
         let track_path_str = track_path.to_string_lossy();
         
@@ -202,9 +201,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 
                 // 提取文件扩展名（用于显示文件类型）
                 let ext = track_path_str.split('.').last().unwrap_or("未知").to_uppercase();
+
+                // 播放模式字符串
+                let play_mode_str: &str = match play_mode{1=>"顺", 2=>"逆", 3=>"随", _=>"未"};
                 
-                let display_text = format!("{} [{}] [{} - {}] - [{} / {}] (音量: {:.0}%)", 
+                let display_text = format!("{}[{}][{}][{}-{}][{}/{}][{:.0}%]", 
                     track_count_str, 
+                    play_mode_str,
                     ext,
                     title, 
                     artist, 

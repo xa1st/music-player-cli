@@ -1,7 +1,70 @@
 
 use std::{fs, io, path::{Path, PathBuf}};
 use std::time::Duration;
+// 引入 unicode_width 库
 use unicode_width::{UnicodeWidthStr, UnicodeWidthChar}; 
+// 引入 glob 库用于通配符匹配
+use glob::glob as glob_func;
+// ----------------------------------------------------
+// --- 新增工具函数：智能解析输入 ---
+// ----------------------------------------------------
+/// 根据输入字符串智能判断其类型（文件、目录、播放列表文件或通配符），
+/// 并返回生成的音频文件列表。
+pub fn get_playlist_from_input(input: &str) -> Result<Vec<PathBuf>, io::Error> {
+    // 1. 检查是否为通配符模式 (*.mp3, *.flac)
+    // ⚠️ 注意：Rust 的 std::fs 目前不直接支持 shell 通配符展开。
+    // 这里我们将使用 glob 库来实现，您需要在 Cargo.toml 中添加 `glob = "0.3"`
+    // 并将 `use glob::glob;` 添加到文件顶部。
+    // 我们先假设您已在 main.rs 顶部添加了 use glob::glob;
+    // 如果没有，可以先跳过通配符解析，只实现文件/目录/文本判断。
+    if input.contains('*') {
+        // 处理通配符，例如 "songs/*.mp3"
+        let mut paths = Vec::new();
+        match glob_func(input) {
+            Ok(entries) => {
+                for entry in entries {
+                    match entry {
+                        Ok(path) => {
+                            if path.is_file() {
+                                paths.push(path);
+                            }
+                        },
+                        Err(e) => eprintln!("通配符匹配错误: {:?}", e),
+                    }
+                }
+                return Ok(paths);
+            },
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("通配符模式错误: {}", e))),
+        }
+    }
+    // 2. 尝试将输入转换为 PathBuf
+    let path = PathBuf::from(input);
+    // 3. 判断路径是否存在
+    if !path.exists() {
+        return Err(io::Error::new(io::ErrorKind::NotFound, format!("路径或文件不存在: {}", input)));
+    }
+    // 4. 判断类型
+    if path.is_dir() {
+        // 如果是目录，扫描目录下的所有音频文件
+        println!("检测到目录，扫描音频文件...");
+        scan_audio_files(&path) // 假设此函数在 utils 中
+    } else if path.is_file() {
+        // 检查文件扩展名，判断是音频媒体文件还是播放列表文件
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        if ext == "txt" {
+            // 如果是播放列表或文本文件，尝试解析播放列表
+            println!("检测到播放列表文件，开始解析...");
+            read_playlist_file(&path) // 假设此函数在 utils 中
+        } else {
+            // 默认视为单个音频文件
+            println!("检测到单个音频文件，作为单曲播放...");
+            Ok(vec![path])
+        }
+    } else {
+        // 其他类型 (如符号链接等，这里简化处理为无法解析)
+        Err(io::Error::new(io::ErrorKind::InvalidInput, "无法识别的路径类型"))
+    }
+}
 
 /// 根据终端显示宽度截断字符串，并在末尾添加 "..."。
 pub fn truncate_string(s: &str, max_width: usize) -> String {

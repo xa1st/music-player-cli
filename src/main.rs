@@ -36,7 +36,7 @@ use crossterm::{
 const MIN_SKIP_INTERVAL: Duration = Duration::from_millis(250); // 最小切歌间隔
 const VOLUME_STEP: f32 = 0.01; // 音量调节步长
 const UPDATE_INTERVAL: Duration = Duration::from_millis(1000); // 进度更新频率
-const ERROR_WAIT_DURATION: Duration = Duration::from_secs(5);
+const ERROR_WAIT_DURATION: Duration = Duration::from_secs(1);
 
 // ===============================================
 // 异步预加载数据结构

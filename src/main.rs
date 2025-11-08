@@ -104,6 +104,95 @@ fn start_preloader_thread(
     });
 }
 
+// 启动指定索引的预加载（如果索引有效）
+fn start_preload_if_valid(
+    playlist: &[PathBuf],
+    index: usize,
+    tx: &Sender<PreloadResult>,
+) {
+    if index < playlist.len() {
+        let path = playlist[index].clone();
+        start_preloader_thread(path, index, tx.clone());
+    }
+}
+
+// 显示错误信息并等待
+fn display_error_and_wait(
+    stdout: &mut io::Stdout,
+    current_index: usize,
+    total_tracks: usize,
+    err_type: &str,
+    filename: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(ClearType::CurrentLine))?;
+    let track_info = format!("[{}/{}]", current_index + 1, total_tracks);
+    let error_msg_truncated = truncate_string(filename, 30);
+    eprint!("{} [错误:{}]: {} -> 跳过...", track_info, err_type, error_msg_truncated);
+    thread::sleep(ERROR_WAIT_DURATION);
+    execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(ClearType::CurrentLine))?;
+    Ok(())
+}
+
+// 更新进度显示
+fn update_progress_display(
+    stdout: &mut io::Stdout,
+    current_index: usize,
+    total_tracks: usize,
+    is_random: bool,
+    is_loop: bool,
+    title: &str,
+    artist: &str,
+    track_path: &str,
+    current_time: Duration,
+    total_duration: Duration,
+    volume: f32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let current_time_str = format_duration(current_time);
+    let total_duration_str = format_duration(total_duration);
+    let track_count_str = format!("[{}/{}]", current_index + 1, total_tracks);
+    let ext = track_path.split('.').last().unwrap_or("未知").to_uppercase();
+    let random_str = if is_random { "随" } else { "顺" };
+    let loop_str = if is_loop { "循" } else { "单" };
+    let play_mode_str = format!("{}|{}", random_str, loop_str);
+
+    let mut display_text_unpadded = format!(
+        "{}[{}][{}][][{}/{}][{:.0}%]",
+        track_count_str, play_mode_str, ext, current_time_str, total_duration_str, volume * 100.0
+    );
+
+    let terminal_width = terminal::size().map(|(cols, _)| cols).unwrap_or(80) as usize;
+    let current_unpadded_width = display_text_unpadded.as_str().width();
+    let music_info_width = terminal_width.saturating_sub(current_unpadded_width);
+    let music_info_content = format!("{}-{}", title, artist);
+    let music_info = if music_info_width < 15 {
+        truncate_string(title, music_info_width)
+    } else {
+        truncate_string(&music_info_content, music_info_width)
+    };
+
+    display_text_unpadded = format!(
+        "{}[{}][{}][{}][{}/{}][{:.0}%]",
+        track_count_str, play_mode_str, ext, music_info, current_time_str, total_duration_str, volume * 100.0
+    );
+
+    let new_len = display_text_unpadded.as_str().width();
+    let padding_needed = terminal_width.saturating_sub(new_len);
+    let padding = " ".repeat(padding_needed);
+    let display_text = format!("{}{}", display_text_unpadded, padding);
+
+    execute!(stdout, cursor::MoveToColumn(0))?;
+    print!("{}", display_text);
+    stdout.flush()?;
+    Ok(())
+}
+
+// 调整音量
+fn adjust_volume(sink: &Sink, delta: f32) {
+    let current_volume = sink.volume();
+    let new_volume = (current_volume + delta).clamp(0.0, 1.0);
+    sink.set_volume(new_volume);
+}
+
 
 // ===============================================
 // MAIN 函数
@@ -111,8 +200,16 @@ fn start_preloader_thread(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
-    let input_path_str = &args.file;
+
+    // 如果没有提供文件参数，显示帮助信息
+    let input_path_str = match &args.file {
+        Some(path) => path,
+        None => {
+            Args::parse_from(&["mddplayer", "--help"]);
+            return Ok(());
+        }
+    };
+
     let is_simple_mode = args.clean;
     let is_random_enabled = args.random;
     let is_loop_enabled = args.is_loop;
@@ -161,13 +258,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 显示界面信息（非纯净模式下）
     if !is_simple_mode {
-        println!(" =====================【 {} 】======================", NAME);
-        println!("  版本:v{}    主页:{}", VERSION, URL);
-        println!(" ===========================================================");
-        println!(" ====================【 控 制 说 明 】======================");
-        println!("  [P]暂停播放   [空格]恢复播放    [Q/Ctrl+C]退出播放");
-        println!("  [←]上一首  [→]下一首  [↑]音量增  [↓]音量减");
-        println!(" ===========================================================");
+        println!("=====================【 {} 】======================", NAME);
+        println!(" 版本:v{}        主页:{}", VERSION, URL);
+        println!("===========================================================");
+        println!("====================【 控 制 说 明 】======================");
+        println!(" [P]静音/取消静音   [空格]暂停/播放    [Q/Ctrl+C]退出播放");
+        println!(" [←]上一首    [→]下一首    [↑]音量增    [↓]音量减");
+        println!("============================================================");
     }
 
     // --- 异步初始化和预加载设置 ---
@@ -176,12 +273,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut current_track_index: usize = 0;
 
     // 🌟 启动第一首歌的预加载
-    if let Some(path) = playlist.get(0).cloned() {
-        start_preloader_thread(path, 0, tx.clone());
-    }
+    start_preload_if_valid(&playlist, 0, &tx);
 
     let mut index_offset: i32 = 0;
     let mut last_skip_time = Instant::now() - MIN_SKIP_INTERVAL;
+    let mut muted_volume: Option<f32> = None; // 静音状态（移到外层循环，避免切歌时丢失）
 
     // --- 主循环：迭代播放列表 ---
     'outer: loop {
@@ -199,10 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if current_track_index >= total_tracks {
             if is_loop_enabled {
                 current_track_index = 0;
-                if total_tracks > 0 {
-                    let next_path = playlist[0].clone();
-                    start_preloader_thread(next_path, 0, tx.clone());
-                }
+                start_preload_if_valid(&playlist, 0, &tx);
             } else {
                 break;
             }
@@ -223,20 +316,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // ⚠️ 接收到失败结果
                 Ok(PreloadResult::Failure(index, err_type, filename)) => {
                     if index == current_track_index {
-                        execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(ClearType::CurrentLine))?;
-
-                        let track_info = format!("[{}/{}]", current_track_index + 1, total_tracks);
-                        let error_msg_truncated = truncate_string(&filename, 30); 
-                        eprint!("{} [错误:{}]: {} -> 跳过...", track_info, err_type, error_msg_truncated);
-
-                        thread::sleep(ERROR_WAIT_DURATION);
-                        execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(ClearType::CurrentLine))?;
-                        
+                        display_error_and_wait(&mut stdout, current_track_index, total_tracks, &err_type, &filename)?;
                         current_track_index += 1;
-                        if current_track_index < total_tracks {
-                            let next_path = playlist[current_track_index].clone();
-                            start_preloader_thread(next_path, current_track_index, tx.clone());
-                        }
+                        start_preload_if_valid(&playlist, current_track_index, &tx);
                         continue 'outer;
                     } else {
                         continue;
@@ -244,22 +326,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 // 如果超时...
                 Err(e) if e == std::sync::mpsc::RecvTimeoutError::Timeout => {
-                    execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(ClearType::CurrentLine))?;
-                    
-                    let track_info = format!("[{}/{}]", current_track_index + 1, total_tracks);
-                    eprint!("{} [错误:加载超时] -> 跳过...", track_info);
-
-                    thread::sleep(ERROR_WAIT_DURATION);
-                    execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(ClearType::CurrentLine))?;
-
+                    display_error_and_wait(&mut stdout, current_track_index, total_tracks, "加载超时", "")?;
                     current_track_index += 1;
-
-                    if current_track_index < total_tracks {
-                        let next_index_to_load = current_track_index;
-                        let next_path = playlist[next_index_to_load].clone();
-                        start_preloader_thread(next_path, next_index_to_load, tx.clone());
-                    }
-
+                    start_preload_if_valid(&playlist, current_track_index, &tx);
                     continue 'outer;
                 }
                 // 接收通道断开
@@ -281,16 +350,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let title = preloaded_data.title;
         let artist = preloaded_data.artist;
         let total_duration = preloaded_data.total_duration;
-        let total_duration_str = format_duration(total_duration);
 
         initial_title = format!("{}-{}-{}v{}", title, artist, NAME, VERSION);
-        execute!(stdout, SetTitle(initial_title.clone()))?;
+        // 根据静音状态设置标题
+        let display_title = if muted_volume.is_some() {
+            format!("[静音]{}", initial_title)
+        } else {
+            initial_title.clone()
+        };
+        execute!(stdout, SetTitle(display_title))?;
 
         let next_index = (current_track_index + 1) % total_tracks;
 
         if next_index != current_track_index && (is_loop_enabled || current_track_index < total_tracks.saturating_sub(1)) {
-            let next_path = playlist[next_index].clone();
-            start_preloader_thread(next_path, next_index, tx.clone());
+            start_preload_if_valid(&playlist, next_index, &tx);
         }
 
         let start_time = Instant::now();
@@ -299,6 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut last_running_time = Duration::from_secs(0);
         let mut last_progress_update = Instant::now();
         let mut forced_stop = false;
+        let mut last_toggle_time = Instant::now() - Duration::from_millis(300); // 按键防抖
 
         // 8. 内部播放循环 
         'inner: while !sink.empty() {
@@ -322,34 +396,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // 刷新显示 (与原代码一致)
             if last_progress_update.elapsed() >= UPDATE_INTERVAL {
-                let current_time_str = format_duration(current_time);
-                let track_count_str = format!("[{}/{}]", current_track_index + 1, total_tracks);
-                let ext = track_path_str.split('.').last().unwrap_or("未知").to_uppercase();
-                let random_str = if is_random_enabled { "随" } else { "顺" };
-                let loop_str = if is_loop_enabled { "循" } else { "单" };
-                let play_mode_str = format!("{}|{}", random_str, loop_str);
-
-                let mut display_text_unpadded = format!("{}[{}][{}][][{}/{}][{:.0}%]", track_count_str, play_mode_str, ext, current_time_str, total_duration_str, sink.volume() * 100.0);
-
-                let terminal_width = terminal::size().map(|(cols, _)| cols).unwrap_or(80) as usize;
-                let current_unpadded_width = display_text_unpadded.as_str().width();
-                let music_info_width = terminal_width.saturating_sub(current_unpadded_width);
-                let music_info_content = format!("{}-{}", title, artist);
-                let music_info = if music_info_width < 15 {
-                    truncate_string(&title, music_info_width)
-                } else {
-                    truncate_string(&music_info_content, music_info_width)
-                };
-                display_text_unpadded = format!("{}[{}][{}][{}][{}/{}][{:.0}%]", track_count_str, play_mode_str, ext, music_info, current_time_str, total_duration_str, sink.volume() * 100.0);
-
-                let new_len = display_text_unpadded.as_str().width();
-                let padding_needed = terminal_width.saturating_sub(new_len);
-                let padding = " ".repeat(padding_needed);
-                let display_text = format!("{}{}", display_text_unpadded, padding);
-
-                execute!(stdout, cursor::MoveToColumn(0))?;
-                print!("{}", display_text);
-                stdout.flush()?;
+                update_progress_display(
+                    &mut stdout,
+                    current_track_index,
+                    total_tracks,
+                    is_random_enabled,
+                    is_loop_enabled,
+                    &title,
+                    &artist,
+                    &track_path_str,
+                    current_time,
+                    total_duration,
+                    sink.volume(),
+                )?;
                 last_progress_update = Instant::now();
             }
 
@@ -357,23 +416,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key_event) = event::read()? {
                     match key_event.code {
-                        // 暂停/恢复
+                        // P键：静音/取消静音
                         KeyCode::Char('p') | KeyCode::Char('P') => {
-                            if !sink.is_paused() {
-                                let currect_title = format!("[暂停]{}", initial_title);
-                                execute!(stdout, SetTitle(currect_title))?;
-                                sink.pause();
+                            if last_toggle_time.elapsed() < Duration::from_millis(200) { continue; }
+                            last_toggle_time = Instant::now();
+                            if let Some(vol) = muted_volume {
+                                // 取消静音
+                                sink.set_volume(vol);
+                                muted_volume = None;
+                                execute!(stdout, SetTitle(initial_title.clone()))?;
+                            } else {
+                                // 静音
+                                muted_volume = Some(sink.volume());
+                                sink.set_volume(0.0);
+                                let mute_title = format!("[静音]{}", initial_title);
+                                execute!(stdout, SetTitle(mute_title))?;
                             }
                         }
+                        // 空格键：暂停/播放
                         KeyCode::Char(' ') => {
+                            if last_toggle_time.elapsed() < Duration::from_millis(200) { continue; }
+                            last_toggle_time = Instant::now();
                             if sink.is_paused() {
-                                execute!(stdout, SetTitle(initial_title.clone()))?;
                                 sink.play();
+                                execute!(stdout, SetTitle(initial_title.clone()))?;
+                            } else {
+                                sink.pause();
+                                let pause_title = format!("[暂停]{}", initial_title);
+                                execute!(stdout, SetTitle(pause_title))?;
                             }
                         }
                         // 音量控制
-                        KeyCode::Up => { let current_volume = sink.volume(); let new_volume = (current_volume + VOLUME_STEP).min(1.0); sink.set_volume(new_volume); }
-                        KeyCode::Down => { let current_volume = sink.volume(); let new_volume = (current_volume - VOLUME_STEP).max(0.0); sink.set_volume(new_volume); }
+                        KeyCode::Up => adjust_volume(&sink, VOLUME_STEP),
+                        KeyCode::Down => adjust_volume(&sink, -VOLUME_STEP),
                         // 切歌：下一首
                         KeyCode::Right => {
                             if last_skip_time.elapsed() < MIN_SKIP_INTERVAL { continue; }
@@ -408,10 +483,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // -----------------------------------------------------------------
             // 🌟 BUG 修复：手动切歌后，必须立即启动新目标歌曲的预加载
             // -----------------------------------------------------------------
-            if current_track_index < total_tracks {
-                let next_path = playlist[current_track_index].clone();
-                start_preloader_thread(next_path, current_track_index, tx.clone());
-            }
+            start_preload_if_valid(&playlist, current_track_index, &tx);
         } else {
             execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(ClearType::CurrentLine))?;
             current_track_index += 1;

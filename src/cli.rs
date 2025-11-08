@@ -13,9 +13,9 @@ pub const URL: &str = "github.com/xa1st/mddplayer";
 #[clap(author, version = VERSION, about = NAME, long_about = None)]
 // 命令行参数定义
 pub struct Args {
-    /// 这里直接改为输出文件，不再带-f选项
+    /// 音频文件或目录路径
     #[arg(index = 1)]
-    pub file: String,
+    pub file: Option<String>,
     
     /// 启用纯净模式，不显示程序说明模式（如操作指南）
     #[clap(short = 's', long = "simple")]
